@@ -6,21 +6,39 @@ from fpdf import FPDF
 import base64
 
 # --- 1. LÓGICA DE CÁLCULO ---
-def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo):
+def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo, dias_desfase):
     filas = []
     saldo = monto
     fecha_pago = fecha_inicio
     
+    # Calculamos la tasa diaria en base al año comercial bancario (360 días)
+    tasa_diaria = (tasa_anual / 100) / 360
+    
     if tipo_plazo == "Meses":
         tasa_periodo = (tasa_anual / 100) / 12
     else: # Días
-        tasa_periodo = (tasa_anual / 100) / 360
+        tasa_periodo = tasa_diaria
         
-    cuota = monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1)
+    # Cuota base matemática (la que aplicará del mes 2 en adelante)
+    cuota_base = monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1)
+    
+    # Calculamos el dinero extra por los días de desfase
+    interes_extra = monto * tasa_diaria * dias_desfase
 
     for i in range(1, plazo + 1):
-        interes = saldo * tasa_periodo
-        capital = cuota - interes
+        interes_normal = saldo * tasa_periodo
+        
+        # La amortización al capital SIEMPRE usa el interés normal para no descuadrar a futuro
+        capital = cuota_base - interes_normal
+        
+        # LÓGICA DE NEGOCIO: Si es la primera cuota, sumamos el desfase
+        if i == 1:
+            interes_a_cobrar = interes_normal + interes_extra
+            cuota_a_cobrar = cuota_base + interes_extra
+        else:
+            interes_a_cobrar = interes_normal
+            cuota_a_cobrar = cuota_base
+            
         saldo_final = saldo - capital
         
         # Ajuste en la última cuota para cuadrar a 0 exacto
@@ -33,8 +51,8 @@ def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo):
             "FEC. PAG": fecha_pago.strftime("%Y/%m/%d"),
             "SALDO CAP.": saldo,
             "CAPITAL": capital,
-            "INTERES": interes,
-            "CUOTA": cuota
+            "INTERES": interes_a_cobrar,
+            "CUOTA": cuota_a_cobrar
         })
         
         saldo = saldo_final
@@ -44,10 +62,9 @@ def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo):
             fecha_pago = fecha_pago + timedelta(days=1)
             
     df = pd.DataFrame(filas)
-    return df, cuota
+    return df, cuota_base
 
 # --- 2. GENERACIÓN DEL PDF ---
-# (Añadimos fecha_documento como parámetro)
 def generar_pdf(df, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula, tipo_operacion, garante, fecha_documento):
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
@@ -59,7 +76,7 @@ def generar_pdf(df, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula,
     pdf.ln(5)
     
     pdf.set_font("Courier", '', 9)
-    # Fila 1 (Aquí aplicamos la fecha_documento que elijas en la interfaz)
+    # Fila 1
     pdf.cell(40, 5, "TIPO OPERACION:", 0, 0)
     pdf.cell(100, 5, tipo_operacion, 0, 0)
     pdf.cell(40, 5, "FECHA:", 0, 0)
@@ -172,15 +189,18 @@ with col1:
     tipo_plazo = st.radio("Tipo de Plazo", ["Meses", "Días"])
     plazo = st.number_input(f"Plazo en {tipo_plazo}", min_value=1, value=3, step=1)
     
+    # --- NUEVO CAMPO PARA DESFASE ---
+    dias_desfase = st.number_input("Días de desfase (Ajuste 1ra cuota)", min_value=0, value=0, step=1)
+    
     st.markdown("---")
     st.subheader("Fechas")
-    # Nuevo campo para la fecha de emisión del documento
     fecha_documento = st.date_input("Fecha de Emisión del Documento", datetime.now())
     fecha_inicio = st.date_input("Fecha de 1er Pago", datetime(2026, 8, 30))
 
 with col2:
     if st.button("Calcular Amortización", type="primary"):
-        df_amortizacion, cuota_base = calcular_amortizacion(monto, tasa, plazo, fecha_inicio, tipo_plazo)
+        # Se envía el nuevo parámetro dias_desfase a la función
+        df_amortizacion, cuota_base = calcular_amortizacion(monto, tasa, plazo, fecha_inicio, tipo_plazo, dias_desfase)
         
         st.subheader("Vista Previa de la Tabla")
         df_display = df_amortizacion.copy()
@@ -189,7 +209,6 @@ with col2:
             
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
-        # Pasamos la nueva variable fecha_documento a la función de generar PDF
         pdf_bytes = generar_pdf(df_amortizacion, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula, tipo_operacion, garante, fecha_documento)
         b64 = base64.b64encode(pdf_bytes).decode('latin1')
         
