@@ -5,46 +5,47 @@ from dateutil.relativedelta import relativedelta
 from fpdf import FPDF
 import base64
 
-# --- 1. LÓGICA DE CÁLCULO ---
+# --- 1. LÓGICA DE CÁLCULO (CON REDONDEO ESTRICTO A 2 DECIMALES) ---
 def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo, dias_desfase):
     filas = []
-    saldo = monto
+    saldo = round(monto, 2)
     fecha_pago = fecha_inicio
     
-    # Calculamos la tasa diaria en base al año comercial bancario (360 días)
     tasa_diaria = (tasa_anual / 100) / 360
     
     if tipo_plazo == "Meses":
         tasa_periodo = (tasa_anual / 100) / 12
-    else: # Días
+    else: 
         tasa_periodo = tasa_diaria
         
-    # Cuota base matemática (la que aplicará del mes 2 en adelante)
-    cuota_base = monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1)
+    # Cuota base redondeada al centavo
+    cuota_base = round(monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1), 2)
     
-    # Calculamos el dinero extra por los días de desfase
-    interes_extra = monto * tasa_diaria * dias_desfase
+    # Interés extra redondeado
+    interes_extra = round(monto * tasa_diaria * dias_desfase, 2)
 
     for i in range(1, plazo + 1):
-        interes_normal = saldo * tasa_periodo
+        # Calculamos y redondeamos el interés del mes
+        interes_normal = round(saldo * tasa_periodo, 2)
         
-        # La amortización al capital SIEMPRE usa el interés normal para no descuadrar a futuro
-        capital = cuota_base - interes_normal
+        # El capital se calcula con los valores ya redondeados
+        capital = round(cuota_base - interes_normal, 2)
         
-        # LÓGICA DE NEGOCIO: Si es la primera cuota, sumamos el desfase
         if i == 1:
-            interes_a_cobrar = interes_normal + interes_extra
-            cuota_a_cobrar = cuota_base + interes_extra
+            interes_a_cobrar = round(interes_normal + interes_extra, 2)
+            cuota_a_cobrar = round(cuota_base + interes_extra, 2)
         else:
             interes_a_cobrar = interes_normal
             cuota_a_cobrar = cuota_base
             
-        saldo_final = saldo - capital
+        # Saldo final redondeado
+        saldo_final = round(saldo - capital, 2)
         
-        # Ajuste en la última cuota para cuadrar a 0 exacto
+        # Ajuste en la última cuota para evitar descuadres de centavos por el redondeo
         if i == plazo:
-            saldo_final = 0.0
-            capital = saldo
+            saldo_final = 0.00
+            capital = round(saldo, 2)
+            cuota_a_cobrar = round(capital + interes_a_cobrar, 2)
 
         filas.append({
             "Div": i,
@@ -123,32 +124,29 @@ def generar_pdf(df, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula,
     
     pdf.set_font("Courier", '', 9)
     
-    tot_capital = 0
-    tot_interes = 0
-    tot_cuota = 0
+    # Sumar directamente desde el DataFrame (que ya contiene los valores redondeados)
+    tot_capital = round(df['CAPITAL'].sum(), 2)
+    tot_interes = round(df['INTERES'].sum(), 2)
+    tot_cuota = round(df['CUOTA'].sum(), 2)
     
     for _, row in df.iterrows():
         pdf.set_x(20)
         pdf.cell(anchos[0], 5, str(row['Div']), 0, align='C')
         pdf.cell(anchos[1], 5, row['FEC. PAG'], 0, align='C')
-        pdf.cell(anchos[2], 5, f"{row['SALDO CAP.']:,.2f}", 0, align='C')
-        pdf.cell(anchos[3], 5, f"{row['CAPITAL']:,.2f}", 0, align='C')
-        pdf.cell(anchos[4], 5, f"{row['INTERES']:,.2f}", 0, align='C')
-        pdf.cell(anchos[5], 5, f"{row['CUOTA']:,.2f}", 0, align='C')
+        pdf.cell(anchos[2], 5, f"{row['SALDO CAP.']:.2f}", 0, align='C')
+        pdf.cell(anchos[3], 5, f"{row['CAPITAL']:.2f}", 0, align='C')
+        pdf.cell(anchos[4], 5, f"{row['INTERES']:.2f}", 0, align='C')
+        pdf.cell(anchos[5], 5, f"{row['CUOTA']:.2f}", 0, align='C')
         pdf.ln()
-        
-        tot_capital += row['CAPITAL']
-        tot_interes += row['INTERES']
-        tot_cuota += row['CUOTA']
         
     pdf.line(20, pdf.get_y(), sum(anchos)+20, pdf.get_y())
     pdf.set_font("Courier", 'B', 9)
     pdf.set_x(20)
     pdf.cell(anchos[0] + anchos[1], 6, "TOTALES", 0, align='L')
     pdf.cell(anchos[2], 6, "0.00", 0, align='C') 
-    pdf.cell(anchos[3], 6, f"{tot_capital:,.2f}", 0, align='C')
-    pdf.cell(anchos[4], 6, f"{tot_interes:,.2f}", 0, align='C')
-    pdf.cell(anchos[5], 6, f"{tot_cuota:,.2f}", 0, align='C')
+    pdf.cell(anchos[3], 6, f"{tot_capital:.2f}", 0, align='C')
+    pdf.cell(anchos[4], 6, f"{tot_interes:.2f}", 0, align='C')
+    pdf.cell(anchos[5], 6, f"{tot_cuota:.2f}", 0, align='C')
     
     # Firmas
     pdf.ln(25)
@@ -179,27 +177,25 @@ col1, col2 = st.columns([1, 2])
 with col1:
     st.header("Datos del Préstamo")
     tipo_operacion = st.text_input("Tipo Operación", "CREDI TODO")
-    socio = st.text_input("Cliente / Socio", "SAMANIEGO PASACA CECIBEL DE LOS ANGELES")
-    cedula = st.text_input("Cédula", "1104500168")
+    socio = st.text_input("Cliente / Socio", "JHOANA ÁLVAREZ")
+    cedula = st.text_input("Cédula", "088318044")
     garante = st.text_input("Nombre del Garante", "HERNRY GONZÁLEZ") 
     
-    monto = st.number_input("Monto ($)", min_value=1.0, value=250.0, step=10.0)
+    monto = st.number_input("Monto ($)", min_value=1.0, value=600.0, step=10.0)
     tasa = st.number_input("Tasa Nominal (%)", min_value=0.1, value=10.0, step=0.1, format="%.4f")
     
     tipo_plazo = st.radio("Tipo de Plazo", ["Meses", "Días"])
-    plazo = st.number_input(f"Plazo en {tipo_plazo}", min_value=1, value=3, step=1)
+    plazo = st.number_input(f"Plazo en {tipo_plazo}", min_value=1, value=8, step=1)
     
-    # --- NUEVO CAMPO PARA DESFASE ---
     dias_desfase = st.number_input("Días de desfase (Ajuste 1ra cuota)", min_value=0, value=0, step=1)
     
     st.markdown("---")
     st.subheader("Fechas")
-    fecha_documento = st.date_input("Fecha de Emisión del Documento", datetime.now())
-    fecha_inicio = st.date_input("Fecha de 1er Pago", datetime(2026, 8, 30))
+    fecha_documento = st.date_input("Fecha de Emisión del Documento", datetime(2026, 9, 7))
+    fecha_inicio = st.date_input("Fecha de 1er Pago", datetime(2026, 10, 7))
 
 with col2:
     if st.button("Calcular Amortización", type="primary"):
-        # Se envía el nuevo parámetro dias_desfase a la función
         df_amortizacion, cuota_base = calcular_amortizacion(monto, tasa, plazo, fecha_inicio, tipo_plazo, dias_desfase)
         
         st.subheader("Vista Previa de la Tabla")
