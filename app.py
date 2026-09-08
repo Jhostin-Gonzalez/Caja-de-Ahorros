@@ -4,13 +4,24 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from fpdf import FPDF
 import base64
+from decimal import Decimal, ROUND_HALF_UP
 
-# --- 1. LÓGICA DE CÁLCULO (CON REDONDEO ESTRICTO A 2 DECIMALES) ---
+# --- 0. FUNCIÓN DE REDONDEO FINANCIERO ESTRICTO ---
+def redondear(valor):
+    """
+    Fuerza el redondeo comercial real (ROUND_HALF_UP),
+    donde cualquier decimal en .005 o superior sube al siguiente centavo.
+    """
+    # Se convierte a string primero para evitar la imprecisión de los flotantes en la memoria
+    return float(Decimal(str(valor)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+# --- 1. LÓGICA DE CÁLCULO ---
 def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo, dias_desfase):
     filas = []
-    saldo = round(monto, 2)
+    saldo = redondear(monto)
     fecha_pago = fecha_inicio
     
+    # Tasa comercial bancaria
     tasa_diaria = (tasa_anual / 100) / 360
     
     if tipo_plazo == "Meses":
@@ -18,34 +29,36 @@ def calcular_amortizacion(monto, tasa_anual, plazo, fecha_inicio, tipo_plazo, di
     else: 
         tasa_periodo = tasa_diaria
         
-    # Cuota base redondeada al centavo
-    cuota_base = round(monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1), 2)
+    # Cálculo de la cuota base pura y su redondeo estricto
+    valor_cuota_pura = monto * (tasa_periodo * (1 + tasa_periodo)**plazo) / ((1 + tasa_periodo)**plazo - 1)
+    cuota_base = redondear(valor_cuota_pura)
     
-    # Interés extra redondeado
-    interes_extra = round(monto * tasa_diaria * dias_desfase, 2)
+    # Cálculo del interés de desfase (si el cliente lo pagará en la primera cuota)
+    interes_extra = redondear(monto * tasa_diaria * dias_desfase)
 
     for i in range(1, plazo + 1):
-        # Calculamos y redondeamos el interés del mes
-        interes_normal = round(saldo * tasa_periodo, 2)
+        # 1. El interés se calcula y se redondea
+        interes_normal = redondear(saldo * tasa_periodo)
         
-        # El capital se calcula con los valores ya redondeados
-        capital = round(cuota_base - interes_normal, 2)
+        # 2. El capital se obtiene restando la cuota fija base menos el interés ya redondeado
+        capital = redondear(cuota_base - interes_normal)
         
+        # Lógica de asignación del desfase a la cuota 1
         if i == 1:
-            interes_a_cobrar = round(interes_normal + interes_extra, 2)
-            cuota_a_cobrar = round(cuota_base + interes_extra, 2)
+            interes_a_cobrar = redondear(interes_normal + interes_extra)
+            cuota_a_cobrar = redondear(cuota_base + interes_extra)
         else:
             interes_a_cobrar = interes_normal
             cuota_a_cobrar = cuota_base
             
-        # Saldo final redondeado
-        saldo_final = round(saldo - capital, 2)
+        # 3. El saldo final desciende usando el capital redondeado
+        saldo_final = redondear(saldo - capital)
         
-        # Ajuste en la última cuota para evitar descuadres de centavos por el redondeo
+        # Ajuste matemático para la última cuota (absorbe cualquier descuadre de centavos)
         if i == plazo:
             saldo_final = 0.00
-            capital = round(saldo, 2)
-            cuota_a_cobrar = round(capital + interes_a_cobrar, 2)
+            capital = redondear(saldo)
+            cuota_a_cobrar = redondear(capital + interes_a_cobrar)
 
         filas.append({
             "Div": i,
@@ -124,10 +137,10 @@ def generar_pdf(df, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula,
     
     pdf.set_font("Courier", '', 9)
     
-    # Sumar directamente desde el DataFrame (que ya contiene los valores redondeados)
-    tot_capital = round(df['CAPITAL'].sum(), 2)
-    tot_interes = round(df['INTERES'].sum(), 2)
-    tot_cuota = round(df['CUOTA'].sum(), 2)
+    # Aplicamos el redondeo comercial también en la suma total
+    tot_capital = redondear(df['CAPITAL'].sum())
+    tot_interes = redondear(df['INTERES'].sum())
+    tot_cuota = redondear(df['CUOTA'].sum())
     
     for _, row in df.iterrows():
         pdf.set_x(20)
@@ -191,6 +204,7 @@ with col1:
     
     st.markdown("---")
     st.subheader("Fechas")
+    # Configurado con las fechas de tu último ejemplo para pruebas rápidas
     fecha_documento = st.date_input("Fecha de Emisión del Documento", datetime(2026, 9, 7))
     fecha_inicio = st.date_input("Fecha de 1er Pago", datetime(2026, 10, 7))
 
@@ -200,11 +214,14 @@ with col2:
         
         st.subheader("Vista Previa de la Tabla")
         df_display = df_amortizacion.copy()
+        
+        # Dar formato visual a la tabla en Streamlit
         for col in ["SALDO CAP.", "CAPITAL", "INTERES", "CUOTA"]:
             df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
             
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
+        # Generar y renderizar el botón del PDF
         pdf_bytes = generar_pdf(df_amortizacion, monto, tasa, plazo, fecha_inicio, tipo_plazo, socio, cedula, tipo_operacion, garante, fecha_documento)
         b64 = base64.b64encode(pdf_bytes).decode('latin1')
         
